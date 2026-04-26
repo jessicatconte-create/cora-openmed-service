@@ -12,6 +12,8 @@ DEFAULT_PII_MODEL = "OpenMed/OpenMed-PII-Portuguese-SnowflakeMed-Large-568M-v1"
 DEFAULT_DISEASE_MODEL = "OpenMed/OpenMed-NER-DiseaseDetect-SuperClinical-434M"
 DEFAULT_PHARMA_MODEL = "OpenMed/OpenMed-NER-PharmaDetect-SuperClinical-434M"
 DEFAULT_ANATOMY_MODEL = "OpenMed/OpenMed-NER-AnatomyDetect-SuperClinical-184M"
+DEFAULT_ONCOLOGY_MODEL = "OpenMed/OpenMed-NER-OncologyDetect-SuperClinical-434M"
+DEFAULT_CHEM_MODEL = "OpenMed/OpenMed-NER-ChemicalDetect-SuperMedical-355M"
 
 
 def _verify_token(authorization: str) -> None:
@@ -93,6 +95,19 @@ def clinical_extract(req: ClinicalExtractRequest, authorization: str = Header(..
     threshold = req.confidence_threshold
     text = req.text
 
+    def get_entities(result):
+        if isinstance(result, dict):
+            return result.get("entities", [])
+        if hasattr(result, "entities"):
+            return result.entities
+        return []
+
+    def to_entity_list(result):
+        return [
+            {"text": e["text"], "confidence": e["confidence"], "start": e["start"], "end": e["end"]}
+            for e in get_entities(result)
+        ]
+
     disease_result = openmed.analyze_text(
         text, model_name=DEFAULT_DISEASE_MODEL,
         confidence_threshold=threshold, output_format="dict",
@@ -105,26 +120,23 @@ def clinical_extract(req: ClinicalExtractRequest, authorization: str = Header(..
         text, model_name=DEFAULT_ANATOMY_MODEL,
         confidence_threshold=threshold, output_format="dict",
     )
+    oncology_result = openmed.analyze_text(
+        text, model_name=DEFAULT_ONCOLOGY_MODEL,
+        confidence_threshold=threshold, output_format="dict",
+    )
+    chem_result = openmed.analyze_text(
+        text, model_name=DEFAULT_CHEM_MODEL,
+        confidence_threshold=threshold, output_format="dict",
+    )
 
-    def get_entities(result):
-        if isinstance(result, dict):
-            return result.get("entities", [])
-        if hasattr(result, "entities"):
-            return result.entities
-        return []
+    oncology_entities = to_entity_list(oncology_result)
 
     return {
         "text": text,
-        "conditions": [
-            {"text": e["text"], "confidence": e["confidence"], "start": e["start"], "end": e["end"]}
-            for e in get_entities(disease_result)
-        ],
-        "medications": [
-            {"text": e["text"], "confidence": e["confidence"], "start": e["start"], "end": e["end"]}
-            for e in get_entities(pharma_result)
-        ],
-        "anatomy": [
-            {"text": e["text"], "confidence": e["confidence"], "start": e["start"], "end": e["end"]}
-            for e in get_entities(anatomy_result)
-        ],
+        "conditions": to_entity_list(disease_result),
+        "medications": to_entity_list(pharma_result),
+        "anatomy": to_entity_list(anatomy_result),
+        "lab_values": to_entity_list(chem_result),
+        "oncology_flags": oncology_entities,
+        "oncology_alert": len(oncology_entities) > 0,
     }
