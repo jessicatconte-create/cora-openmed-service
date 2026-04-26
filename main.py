@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
@@ -108,35 +109,35 @@ def clinical_extract(req: ClinicalExtractRequest, authorization: str = Header(..
             for e in get_entities(result)
         ]
 
-    disease_result = openmed.analyze_text(
-        text, model_name=DEFAULT_DISEASE_MODEL,
-        confidence_threshold=threshold, output_format="dict",
-    )
-    pharma_result = openmed.analyze_text(
-        text, model_name=DEFAULT_PHARMA_MODEL,
-        confidence_threshold=threshold, output_format="dict",
-    )
-    anatomy_result = openmed.analyze_text(
-        text, model_name=DEFAULT_ANATOMY_MODEL,
-        confidence_threshold=threshold, output_format="dict",
-    )
-    oncology_result = openmed.analyze_text(
-        text, model_name=DEFAULT_ONCOLOGY_MODEL,
-        confidence_threshold=threshold, output_format="dict",
-    )
-    chem_result = openmed.analyze_text(
-        text, model_name=DEFAULT_CHEM_MODEL,
-        confidence_threshold=threshold, output_format="dict",
-    )
+    def run_model(model_name):
+        return openmed.analyze_text(
+            text, model_name=model_name,
+            confidence_threshold=threshold, output_format="dict",
+        )
 
-    oncology_entities = to_entity_list(oncology_result)
+    models = {
+        "disease": DEFAULT_DISEASE_MODEL,
+        "pharma": DEFAULT_PHARMA_MODEL,
+        "anatomy": DEFAULT_ANATOMY_MODEL,
+        "oncology": DEFAULT_ONCOLOGY_MODEL,
+        "chem": DEFAULT_CHEM_MODEL,
+    }
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(run_model, model): key for key, model in models.items()}
+        for future in as_completed(futures):
+            key = futures[future]
+            results[key] = future.result()
+
+    oncology_entities = to_entity_list(results["oncology"])
 
     return {
         "text": text,
-        "conditions": to_entity_list(disease_result),
-        "medications": to_entity_list(pharma_result),
-        "anatomy": to_entity_list(anatomy_result),
-        "lab_values": to_entity_list(chem_result),
+        "conditions": to_entity_list(results["disease"]),
+        "medications": to_entity_list(results["pharma"]),
+        "anatomy": to_entity_list(results["anatomy"]),
+        "lab_values": to_entity_list(results["chem"]),
         "oncology_flags": oncology_entities,
         "oncology_alert": len(oncology_entities) > 0,
     }
